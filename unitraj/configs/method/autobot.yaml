@@ -1,0 +1,65 @@
+# ============================================================
+# AutoBot (Latent Variable Sequential Set Transformers)
+# Paper: https://arxiv.org/abs/2104.00563   (ICLR 2022, Girgis et al.)
+# ============================================================
+# Core design: Set Transformer alternates self-attention along the time and agent axes to model
+# interactions between agents and produce K scene-level joint trajectory modes. Its architecture differs from
+# MTR's anchor-based decoder and Wayformer's Perceiver backbone.
+#
+# Values in this file override matching config.yaml fields via OmegaConf.merge in train.py.
+# Hydra command-line overrides take precedence: python train.py method=autobot method.train_batch_size=64 ...
+# ============================================================
+
+model_name: autobot
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+num_modes:            6             # Six candidate trajectories, matching Waymo evaluation.
+hidden_size:          128           # Transformer hidden dimension (d_model), half the MTR/Wayformer setting.
+num_encoder_layers:   2             # Number of encoder transformer layers, with time-attention and agent-attention blocks.
+num_decoder_layers:   2             # Number of decoder transformer layers.
+tx_hidden_size:       384           # Transformer FFN hidden dimension: 3 * hidden_size.
+tx_num_heads:         16            # Number of attention heads (8 dimensions per head).
+dropout:              0.1
+
+# --- 2. Training hyperparameters (loss weights, epochs, learning rate, scheduler, decay, gradient clipping) ---
+# Loss weights.
+entropy_weight:       40.0          # Mode classification cross-entropy weight.
+kl_weight:            20.0          # KL divergence weight for the future distribution.
+use_FDEADE_aux_loss:  True          # Whether to add the FDE/ADE auxiliary loss.
+max_epochs:           60            # 60-epoch training budget; MTR uses 30 in its method configuration.
+optimizer:            Adam          # The AutoBots paper uses Adam rather than AdamW.
+# Use a lower learning rate on Waymo. The paper's 7.5e-4 setting targets 30-step Argoverse prediction; with 80 Waymo steps and more agents,
+# earlier local runs drove the Laplace scale too low, with loss below -12000 followed by NaNs.
+learning_rate:        1.0e-4        # Matches the MTR/Wayformer learning rate setting.
+optimizer_eps:        1.0e-4
+scheduler:            multistep     # Learning rate schedule: multistep | plateau.
+learning_rate_sched:  [10, 20, 30, 40, 50]   # Epoch-based MultiStepLR milestones.
+lr_decay:             0.5           # Multiply the learning rate by 0.5 at each milestone.
+# Laplace NLL gradients can become large as the scale approaches zero, so use tight gradient clipping.
+# The paper uses 5; earlier Waymo runs required 1.0, with 0.5 as a fallback if instability persists.
+grad_clip_norm:       1.0           # Gradient clipping norm, reduced from 5 to 1.0 to limit NaNs.
+
+# --- 3. Data loading (scene files per GPU per step) ---
+# Batch sizes are per GPU under DDP. config.yaml's max_agents_per_batch caps the actual forward-pass targets.
+# The scene batch only needs to provide enough targets to reach this cap; an earlier aligned setting used 10 scenes.
+train_batch_size:     3
+eval_batch_size:      3
+cache_path: "${data_root}/unitraj_cache/autobot_unified_v1"
+h5_cache_format: 'unitraj_autobot_unified_v1'
+
+# --- 4. Data cropping and features (change with care) ---
+# max_num_agents controls context agents per prediction (the tensor N dimension), unlike config.yaml's
+# max_agents_per_batch, which caps flattened targets per step. AutoBots applies attention across agents,
+# so memory grows quadratically with max_num_agents. The shared setting is 32; check memory use for the chosen training setup.
+masked_attributes:     [ 'z_axis' ]
+remove_outliers:       False
+max_num_agents:        32
+max_agent_distance:    80.0
+agent_center_offset:   [ 30.0, 0.0 ]
+map_range:             100
+max_num_roads:         384
+max_points_per_lane:   30
+manually_split_lane:   False
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0

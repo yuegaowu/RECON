@@ -1,0 +1,67 @@
+# ============================================================
+# GameFormer (ICCV 2023 interaction-prediction model)
+# Paper: Game-theoretic Modeling and Learning of Transformer-based
+#        Interactive Prediction and Planning for Autonomous Driving
+# ============================================================
+# UniTraj migration scope:
+#   - Keeps the official interaction-prediction encoder, hierarchical decoder,
+#     joint six-mode GMM heads, and per-level GMM training objective.
+#   - Excludes the open-loop/closed-loop planning branches.
+#   - Each UniTraj center object is paired with its nearest valid retained agent.
+#     The pair is jointly predicted; UniTraj metrics report the center object.
+# ============================================================
+
+model_name: GAMEFORMER
+
+# ━━━ §1 Core architecture ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+num_modes:              6       # Six joint modes shared by the two predicted agents
+encoder_layers:         6       # Official Transformer scene encoder depth
+decoder_levels:         6       # Paper interaction-prediction setting; level 0 plus six refinements
+map_segment_stride:     10      # Official map max-pooling stride
+
+# Native GameFormer map adapter. The common UniTraj pool remains 384x30;
+# the adapter chooses nearby native elements separately for each predicted agent.
+gameformer_num_lane_elements:       6
+gameformer_num_crosswalk_elements:  4
+gameformer_lane_points:             100  # Official loader: 300 raw points -> first 200 every 2
+gameformer_crosswalk_points:        50   # Official loader: 100 raw points every 2
+
+# ━━━ §2 Training ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Loss at every reasoning level:
+#   best joint mode by ADE + 3/5/8s FDE, diagonal GMM NLL, and
+#   2 * label-smoothed joint-mode cross entropy.
+max_epochs:             60
+optimizer:              AdamW
+learning_rate:          0.0001
+weight_decay:           0.0
+scheduler:              multistep
+learning_rate_sched:    [30, 42, 50, 55]
+lr_decay:               0.5
+grad_clip_norm:         5.0
+
+# Keep the 60-epoch schedule shared across datasets, but normalize the update
+# budget with the global Trainer setting:
+#   highD/exiD: limit_train_batches=1.0
+#   Waymo:      limit_train_batches=0.15
+
+# GameFormer duplicates scene context for two predicted actors and is heavier
+# than the single-target models. Start conservatively and raise after profiling.
+train_batch_size:       3
+eval_batch_size:        3
+max_agents_per_batch:   192
+cache_path: "${data_root}/unitraj_cache/gameformer_unified_v1"
+h5_cache_format: "unitraj_gameformer_unified_v1"
+
+# ━━━ §3 Unified UniTraj input pool ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+masked_attributes:       [ "z_axis" ]
+remove_outliers:         False
+max_num_agents:          32
+max_agent_distance:      80.0
+agent_center_offset:     [30.0, 0.0]
+map_range:               100
+max_num_roads:           384
+max_points_per_lane:     30
+manually_split_lane:     False
+point_sampled_interval:  1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0

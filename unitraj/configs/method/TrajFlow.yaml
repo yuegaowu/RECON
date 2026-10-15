@@ -1,0 +1,109 @@
+# ============================================================
+# TrajFlow — multimodal motion prediction via flow matching
+# Paper: https://arxiv.org/abs/2506.08541  (IROS 2025, Qi Yan et al., UBC)
+# ============================================================
+# agent-centric, MTR-family input (29-dim agents, 64 intention anchors, 6 modes).
+# Built directly on the MTR / BeTopNet codebase: the context encoder IS the UniTraj
+# MTR encoder (reused verbatim). The decoder replaces MTR's regression head with a
+# conditional flow-matching denoiser (DMTDecoderLayer + cross-time-consistency loss):
+# 64 noised query trajectories are integrated from noise -> data, then NMS-reduced to
+# 6 modes. The CUDA ops (knn + local attention) are shared with unitraj/models/mtr/ops.
+#
+# Map is processed exactly like every other UniTraj model (29-dim polylines), so
+# NUM_INPUT_ATTR_MAP=29 (vs 9 in the original WOMD repo).
+#
+# OBJECT_TYPE / NUM_FUTURE_FRAMES / CENTER_OFFSET_OF_MAP are injected from the global
+# UniTraj fields (object_type / future_len / center_offset_of_map) by trajflow.py,
+# mirroring how BeTopNet/MTR wire their decoder.
+#
+# Values in this file override matching config.yaml fields via OmegaConf.merge in train.py.
+# Hydra command-line overrides take precedence: python train.py method=TrajFlow ...
+# ============================================================
+
+model_name: TrajFlow
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+MODEL_DMT:
+  # Context encoder: UniTraj MTR encoder, shared with BeTopNet.
+  CONTEXT_ENCODER:
+    NAME: MTREncoder
+    NUM_OF_ATTN_NEIGHBORS: 16
+    NUM_INPUT_ATTR_AGENT: 29
+    NUM_INPUT_ATTR_MAP: 29        # UniTraj map representation (29-dim), not the WOMD 9-dim
+    NUM_CHANNEL_IN_MLP_AGENT: 256
+    NUM_CHANNEL_IN_MLP_MAP: 64
+    NUM_LAYER_IN_MLP_AGENT: 3
+    NUM_LAYER_IN_MLP_MAP: 5
+    NUM_LAYER_IN_PRE_MLP_MAP: 3
+    D_MODEL: 256
+    NUM_ATTN_LAYERS: 6
+    NUM_ATTN_HEAD: 8
+    DROPOUT_OF_ATTN: 0.1
+    USE_LOCAL_ATTN: True
+
+  # Denoising / flow-matching decoder.
+  DMT:
+    D_QUERY: 512                  # Query token dimension.
+    D_OBJ: 256                    # Context agent token dimension.
+    D_MAP: 256                    # Context map token dimension.
+    DEPTH: 6                      # Number of transformer decoder layers.
+    HEADS: 8
+    DROPOUT: 0.1
+    NUM_QUERY: 64                 # Number of queries, equal to the number of intention anchors.
+    NUM_MOTION_MODES: 6           # Number of output modes after NMS.
+    NUM_BASE_MAP_POLYLINES: 256
+    NUM_WAYPOINT_MAP_POLYLINES: 128
+    # Prior anchors: reuse MTR's 64 Waymo anchors, using the same pickle file as BeTopNet.
+    # Path is relative to the unitraj package root; trajflow.py resolves it before calling build_motion_query.
+    INTENTION_POINTS_FILE: 'models/mtr/cluster_64_center_dict_8s.pkl'
+    LOSS_WEIGHTS: {
+      'cls': 1.0,
+      'reg': 1.0,
+      'vel': 0.5,
+      'pl': 0.1
+    }
+
+  # Denoising objective and flow-matching hyperparameters.
+  DENOISING:
+    FM:
+      SAMPLING_STEPS: 1           # Reverse integration steps during evaluation; more steps increase computation and may improve accuracy.
+      OBJECTIVE: pred_data        # pred_data | pred_vel; CTC supports only pred_data.
+      T_SCHEDULE: uniform         # uniform | log_normal
+    TIED_NOISE: True              # Share one noise vector across queries.
+    CTC_LOSS: True                # Cross-time consistency loss; it can be disabled initially for debugging, then enabled.
+
+  DATA_RESCALE: linear            # Trajectory normalization: linear | sqrt | cbrt | log_center.
+
+# --- 2. Training hyperparameters ---
+max_epochs: 30
+# As in BeTopNet, some conditional flow/CTC decoder projections receive no gradients on certain steps.
+# Use find_unused_parameters_true to avoid DDP reducer errors for unused parameters.
+ddp_strategy: 'ddp_find_unused_parameters_true'
+learning_rate: 0.0001
+optimizer: AdamW
+scheduler: lambdaLR
+learning_rate_sched: [ 22, 24, 26, 28 ]
+lr_decay: 0.5
+lr_clip: 0.000001
+grad_clip_norm: 1.0             # Use a tighter clipping norm of 1.0; the high-variance flow decoder produced NaNs with the previous 1000 setting.
+weight_decay: 0.01
+
+# --- 3. Data loading (same shared input/cache format as MTR and BeTopNet) ---
+train_batch_size: 3
+eval_batch_size: 3
+cache_path: "${data_root}/unitraj_cache/betopnet_unified_v1"
+h5_cache_format: 'unitraj_mtr_unified_v1'
+
+# --- 4. Data cropping and feature masking (as in MTR/BeTopNet: mask z_axis, retain size) ---
+masked_attributes: [ 'z_axis' ]
+remove_outliers: False
+max_num_agents: 32
+max_agent_distance: 80.0
+agent_center_offset: [ 30.0, 0.0 ]
+map_range: 100
+max_num_roads: 384
+max_points_per_lane: 30
+manually_split_lane: False
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0

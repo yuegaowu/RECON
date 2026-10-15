@@ -1,0 +1,81 @@
+# ============================================================
+# SeNeVA (Sequential Neural Variational Agent)
+# Paper: https://openaccess.thecvf.com/content/CVPR2024/html/Lu_Quantifying_Uncertainty_in_Motion_Prediction_with_Variational_Bayesian_Mixture_CVPR_2024_paper.html
+# ============================================================
+# Values in this file override matching config.yaml fields via OmegaConf.merge in train.py.
+# Hydra command-line overrides take precedence: python train.py method=SENEVA method.train_batch_size=4 ...
+#
+# UniTraj integration:
+# Original SeNeVA uses its own Hydra DataModule and PyG PolylineData. For shared evaluation,
+# this implementation directly uses obj_trajs, map_polylines and center_gt_trajs from UniTraj BaseDataset.
+# Input: 11 history samples at 10 Hz. Output: 6 candidate trajectories, each with 80 future (x, y) positions.
+# ============================================================
+
+model_name: SENEVA
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+num_modes:             6            # Six candidate trajectories, matching the Waymo/UniTraj evaluation interface.
+num_components:        6            # Number of Bayesian mixture components; currently matches num_modes.
+num_agent_feature:     29           # Features per agent history sample; must match BaseDataset's obj_trajs.shape[-1].
+                                    # With past_len=11, use the 29-dimensional shared agent representation.
+num_map_feature:       29           # Features per map polyline point, matching the MTR/Wayformer vector map input.
+motion_hidden_size:    128          # VectorNet subgraph hidden dimension for agent trajectories.
+map_hidden_size:       128          # VectorNet subgraph hidden dimension for map polylines.
+decoder_hidden_size:   64           # Latent hidden dimension of the variational recurrent decoder.
+num_subgraph_layers:   3            # Number of VectorNet subgraph layers within each track/map polyline.
+num_global_layers:     2            # Number of stacked A2M/M2M/M2A/A2A global attention layers.
+encoder_num_heads:     4            # Number of global attention heads.
+dropout:               0.1
+output_dim:            2            # SeNeVA emission dimension: 2 predicts future (x, y) positions without directly predicting velocity.
+
+# --- 2. Training hyperparameters (variational objective, epochs, learning rate, scheduler, gradient clipping) ---
+# SeNeVA loss = reconstruction NLL + kl_weight * latent KL + proxy_loss_weight * assignment focal loss。
+kl_weight:             1.0          # KL weight between latent sequence posterior q(v|x,y) and mixture prior p(v|x,z).
+proxy_loss_weight:     0.25         # Weight of surrogate supervision for the assignment network p(z|x).
+prior_trajectory_weight: 0.5        # Best-of-6 ADE supervision on the inference prior to reduce drift over 80 autoregressive steps.
+prior_endpoint_weight:   0.25       # Best-of-6 FDE supervision on the inference prior to improve 8-second endpoint accuracy.
+proxy_target:          nearest_prior # Train mode probabilities against the prior mode closest to GT, avoiding arbitrary argmax choices when q_z is nearly uniform.
+focal_alpha:           0.25         # assignment focal loss alpha
+focal_gamma:           2.0          # assignment focal loss focusing strength
+max_epochs:            60
+learning_rate:         0.001        # Initial AdamW learning rate, following the original SeNeVA baseline.
+weight_decay:          0.01
+betas:                 [0.90, 0.95]
+warmup_steps:          1000         # Warmup length in optimizer steps.
+max_steps:             100000       # Cosine phase length after warmup; total scheduler length is warmup_steps + max_steps.
+min_lr:                0.00005
+grad_clip_norm:        5.0
+
+# --- 3. Data loading (scene files per GPU per step) ---
+# Batch sizes are per GPU under DDP. Each scene expands into center_object samples according to prediction_targets.
+# config.yaml's max_agents_per_batch further limits the prediction targets in each forward pass.
+train_batch_size:      1
+eval_batch_size:       1
+cache_path: "${data_root}/unitraj_cache/seneva_unified_v1"
+h5_cache_format: 'unitraj_seneva_unified_v1'
+
+# --- 4. Data cropping and features (change with care) ---
+# Override masking of both z_axis and size: mask only z and retain vehicle dimensions.
+# Original SeNeVA INTERACTION inputs include length/width; this UniTraj implementation also retains size for the agent encoder.
+masked_attributes:     [ 'z_axis' ]
+
+# max_num_agents limits context agent tokens within each prediction sample. Do not confuse it with config.yaml's
+# max_agents_per_batch: the former limits context within a sample, while the latter limits samples per forward pass.
+# Use 32 context agents, matching MTR/Wayformer/AutoBot/MAE/forecast/EMP/GameFormer, to align context limits
+# for comparison. This is a crop limit, not a weight dimension; padding masks handle N, so changing it preserves checkpoint shapes.
+max_num_agents:        32
+
+# max_agent_distance: center the crop 30 m ahead of the target; at history frame 11, keep the nearest 32 agents within 80 m.
+# Always retain the prediction target.
+max_agent_distance:    80.0
+agent_center_offset:   [ 30.0, 0.0 ]
+
+# Vector map crop: transform the map into the target's local frame and shift the center along its heading by center_offset_of_map
+# (default [30,0] from config.yaml), then crop by map_range and retain at most max_num_roads polylines.
+map_range:             100          # Circular map crop with a 100 m radius around the same shifted center.
+max_num_roads:         384          # Maximum number of map polylines per prediction target.
+max_points_per_lane:   30           # Uniformly subsample only features longer than 30 points; pad and mask shorter features.
+manually_split_lane:   False        # Use original ScenarioNet features without global equal-length splitting.
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0

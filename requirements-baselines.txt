@@ -1,0 +1,9 @@
+# Optional baseline dependencies; binary extensions must match PyTorch/CUDA.
+easydict
+timm==1.0.26
+natten==0.17.4
+torch-geometric==2.6.1
+torch-scatter==2.1.2
+torch-cluster==1.6.3
+torchmetrics==1.8.2
+av2==0.3.6

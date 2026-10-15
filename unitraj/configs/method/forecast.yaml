@@ -1,0 +1,63 @@
+# ============================================================
+# Forecast-MAE (downstream forecasting / fine-tuning stage).
+# ============================================================
+# This is the prediction branch, models/fmae/model_forecast.py, rather than the self-supervised
+# MAE branch (method=MAE). EMP is a lightweight derivative; both share convert_to_fmae_format.
+#
+# Architecture: hist_embed (1D convolution over history) + lane_embed, followed by scene-level self-attention blocks,
+# MultimodalDecoder (K=6 target trajectories and mode logits) and dense_predictor (single-mode regression for other agents).
+# Compact inputs: 4 agent features and 3 lane features, with a four-class x_attr type embedding.
+# Size and z_axis are not read; shared masked_attributes settings need no override.
+#
+# Values in this file override matching config.yaml fields via OmegaConf.merge in train.py.
+# Hydra command-line overrides take precedence: python train.py method=forecast method.train_batch_size=16 ...
+# ============================================================
+
+model_name: forecast
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+# The decoder is MultimodalDecoder with no separate transformer depth, so num_decoder_layers is not used.
+dim:                  128           # Transformer hidden dimension (embed_dim / d_model).
+num_encoder_layers:   4             # Number of scene-level encoder blocks.
+tx_num_heads:         8             # Number of attention heads.
+mlp_ratio:            4.0           # FFN hidden dimension = mlp_ratio * dim.
+qkv_bias:             False         # Whether the attention Q/K/V projections include bias.
+drop_path:            0.2           # Stochastic depth rate, increasing linearly from 0 to drop_path across layers.
+
+# --- 2. Training hyperparameters (pretrained weights, epochs, learning rate, gradient clipping) ---
+# The forecasting optimizer and scheduler are defined in trainer_forecast.py:
+# AdamW with automatic decay/no-decay groups and epoch-based WarmupCosLR (warmup, then cosine decay to 1e-6).
+# The loss is reg + cls + others_reg with equal weights (1:1:1); loss_weight is not read.
+# pretrained_weights: a path loads only net.* through net.load_from_checkpoint() with strict=False.
+# A typical use is initializing the downstream encoder from an MAE pretraining checkpoint.
+pretrained_weights:   null          # Example: ./models/fmae/pretrained_weights/mae_pretrain.ckpt
+max_epochs:           100           # 100 epochs, following the downstream MAE/EMP training recipe.
+warmup_epochs:        10            # Linear warmup to learning_rate over the first 10 epochs.
+learning_rate:        1.0e-3        # AdamW learning rate used with warmup; larger than the common transformer setting of 1e-4.
+weight_decay:         1.0e-4        # AdamW weight decay applied only to Linear/Conv weights.
+grad_clip_norm:       5             # Gradient clipping norm.
+
+# --- 3. Data loading (scene files per GPU per step) ---
+# Batch sizes are per GPU under DDP. config.yaml caps the actual forward-pass targets at max_agents_per_batch=64.
+# The cap limits actual targets; the earlier aligned setting used 10 scenes to supply enough targets per batch.
+train_batch_size:     3
+eval_batch_size:      3
+cache_path: "${data_root}/unitraj_cache/forecast_unified_v1"
+h5_cache_format: 'unitraj_forecast_unified_v1'
+
+# --- 4. Data cropping and feature masking (change with care) ---
+# max_num_agents controls context agents per prediction (the tensor N dimension), unlike config.yaml's
+# max_agents_per_batch=64, which caps flattened targets per step. The shared input uses N=32 and M=384.
+# The forecasting H5 cache retains all 29 features; the model adapter reads only the fields it needs.
+masked_attributes:     [ 'z_axis' ]
+max_num_agents:        32
+max_agent_distance:    80.0
+agent_center_offset:   [ 30.0, 0.0 ]
+map_range:             100
+max_num_roads:         384
+max_points_per_lane:   30
+manually_split_lane:   False
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0
+remove_outliers:      False

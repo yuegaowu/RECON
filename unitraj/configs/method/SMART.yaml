@@ -1,0 +1,143 @@
+# ============================================================
+# SMART (windowed, agent-centric data loading).
+# ============================================================
+# Discretize each agent trajectory into motion tokens (vocabulary size 2048), then predict autoregressively
+# with next-token classification and cross-entropy loss. The map is also tokenized.
+#
+# Windowed loading: each prediction target selected by prediction_targets=sdc/crash/official/all
+# anchors a local window, an independent sub-scene analogous to MTR's center_object. Shift its center forward by center_offset_of_map.
+# Include agents within smart_window_radius, capped by max_num_agents, and map features within smart_map_crop_radius.
+# Flatten windows across scenes, randomly cap them at max_agents_per_batch, then combine them into one forward pass.
+# This aligns the target-based input convention and limits memory use on dense CARLA/DeepAccident maps.
+# The old full-scene loader was removed. Anchors now use prediction_targets rather than only_train_on_ego.
+#
+# Differences from other model configurations:
+# 1. Train with next-token classification; validate an 80-step rollout with single-trajectory minADE/minFDE.
+# 2. Use torch_geometric HeteroData; both onthefly and H5 modes have the same loading semantics (Section 3).
+# 3. SMART logs its own metrics and defines configure_optimizers. Validation logs val/minADE; see monitor_metric in Section 2.
+# 4. The map head contributes to the loss only when train_map=True. Otherwise it runs in forward without receiving gradients.
+# Handle these unused parameters with ddp_strategy in Section 2, including single-GPU runs that use DDP.
+#
+# Keep the nested structure: smart.py reads config.Model.* and config.Model.decoder.*.
+# Model and decoder blocks are required; learning rate and total_steps also belong inside Model.
+#
+# This file overrides matching config.yaml fields. Use Hydra overrides: python train.py method=SMART ...
+# ============================================================
+
+model_name: SMART
+
+# Experiment names, scene limits and loading controls originate in config.yaml; cache_path is model-specific below.
+# Configure data selection and loading through the shared config or command line, as for other models.
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+# Time settings and token vocabularies: <<: *time_info injects the same values into Model and decoder.
+# num_historical_steps/num_future_steps must match config.yaml's past_len/future_len (11/80).
+time_info: &time_info
+  num_historical_steps: 11      # = config.yaml past_len(1.1s @10Hz)
+  num_future_steps:     80      # = config.yaml future_len(8.0s @10Hz)
+  token_size:           2048    # Motion/map vocabulary sizes, which must match the prepared token pickle files.
+
+Model:
+  <<: *time_info
+  dataset:     "waymo"         # Stored only as self.dataset metadata; not used for branching, and does not restrict training to one dataset.
+  input_dim:   2               # Planar coordinates (x, y).
+  hidden_dim:  128             # Transformer hidden dimension.
+  output_dim:  2
+  output_head: False
+  num_heads:   8               # Number of attention heads.
+  head_dim:    16
+  dropout:     0.1
+  num_freq_bands: 64           # Number of Fourier frequency bands for relative positions and angles.
+  # Self-supervision switches: map_pretrain=True trains map-token reconstruction only; train_map=True trains agent and map heads.
+  # Both default to False: train agent next-token prediction with the map as conditioning input.
+  map_pretrain: False
+  train_map:    False
+  # SMART defines configure_optimizers in smart.py and reads optimizer/scheduler values from config.Model.*.
+  # Keep these fields inside Model. AdamW uses cosine scheduling; lr_lambda advances once per epoch, so total_steps
+  # means total epochs and must match max_epochs in Section 2, or the cosine curve reaches zero too early.
+  lr:           0.0003          # Conservative peak learning rate for small-batch highD training.
+  weight_decay: 0.01            # Explicitly set the original PyTorch AdamW default weight decay.
+  warmup_steps: 2              # Reach the peak learning rate over the first 2 epochs to stabilize early token classification.
+  total_steps:  60             # Cosine schedule length in epochs; keep equal to max_epochs.
+  decoder:                     # Autoregressive agent/map token decoder.
+    <<: *time_info
+    num_map_layers:   3        # Number of map-token encoding layers.
+    num_agent_layers: 6        # Number of agent-token decoding layers.
+    a2a_radius:       60       # Agent-to-agent attention radius in meters.
+    pl2pl_radius:     10       # Polyline-to-polyline attention radius in meters.
+    pl2a_radius:      30       # Polyline-to-agent attention radius in meters.
+    time_span:        30       # Temporal attention look-back window in frames.
+
+# --- 2. Training hyperparameters (epochs, gradient clipping, checkpoint selection, DDP) ---
+# lr, warmup_steps and total_steps are inside Model in Section 1; the code reads config.Model.*.
+max_epochs:        60          # Must equal Model.total_steps; see Section 1.
+grad_clip_norm:    1000.0      # Used as gradient_clip_val in train.py.
+# SMART checkpoint selection uses val/minADE: single-trajectory rollout ADE in meters; lower is better.
+# The slash in the metric name places the checkpoint in an epoch=N-val/minADE=X.XX.ckpt subpath.
+monitor_metric:    'val/minADE'
+# DDP strategy: when train_map=False, map-head parameters do not contribute to the loss. Even single-GPU runs use DDP,
+# so find_unused_parameters is required. train.py reads cfg.method.ddp_strategy.
+ddp_strategy:      'ddp_find_unused_parameters_true'
+
+# --- 3. Data loading (windowed: train_batch_size scenes per step) ---
+# train_batch_size has the same meaning for onthefly and H5: scenes per GPU per step. Each scene produces
+# all selected target windows; flatten across scenes, randomly cap at max_agents_per_batch, then combine for one forward pass.
+# Only token preparation differs: onthefly tokenizes during loading, while H5 reads precomputed windows. Batch controls are identical.
+# train/eval_batch_size must be specified by the method YAML; config.yaml provides no default for them.
+# Loading mode and scene limits inherit from config.yaml. To use H5, set
+# onthefly=False; the first run builds the cache, then use_cache=True reuses it.
+# SMART caches contain token graphs and cannot share the base 29-feature H5 cache, so this method uses a separate cache_path.
+train_batch_size:  5
+eval_batch_size:   5
+
+cache_path: "${data_root}/unitraj_cache/smart_token_unified_v1"
+
+# --- 3.1. Motion-token vocabulary (limits achievable trajectory precision) ---
+# SMART quantizes each 0.5-second motion segment (shift=5) into one of token_size motion tokens
+# and predicts the next token, rather than regressing coordinates. Vocabulary coverage limits trajectory precision.
+# The historical Waymo-derived cluster_frame_5_2048.pkl covered urban speeds (mean about 28 km/h, maximum about 129 km/h).
+# Earlier highD runs at 100-140 km/h plateaued near 4 m minADE despite learning rate changes; prepare a suitable vocabulary.
+# Usage through train.py's ensure_agent_tokens, analogous to MTR intention-point preparation:
+# null, 'auto' or a missing file triggers clustering on training data, saving the vocabulary and updating this YAML path.
+# An existing .pkl file is used directly, without clustering.
+# Changing the vocabulary invalidates precomputed token caches. Rebuild them using onthefly=True initially or
+# a new cache_path; otherwise cached token IDs refer to the wrong vocabulary.
+# The saved path includes a dataset tag (..._<tag>.pkl). Before switching datasets,
+# reset it to 'auto' to cluster the new training data, or provide an explicit agent_token_path override.
+# Standalone generation: python tools/gen_agent_tokens.py method=SMART data_root=... prediction_targets=all
+agent_token_path: 'models/smart/tokens/cluster_frame_5_2048.pkl'
+
+# --- 4. Features and data cropping (change with care) ---
+# SMART uses agent['shape'] (length, width, height) for polygon contours and token matching.
+# Mask only z and retain size, overriding shared settings that also mask size, as for MTR.
+masked_attributes: [ 'z_axis' ]
+# manually_split_lane must be False: SMART uses original polyline points and edge_index, not MTR-style equal-length splitting.
+manually_split_lane: False
+# Window anchors are tracks_to_predict selected by the shared prediction_targets setting, as for MTR.
+# Use prediction_targets=sdc for ego only, or crash for collision participants. SMART no longer uses only_train_on_ego.
+
+# --- 5. Window settings (SMART only) ---
+# max_num_agents limits context agents within each window, not the choice of prediction target. Apply the radius filter
+# (smart_window_radius), select the nearest agents to the window center and always retain the anchor.
+# This has the same per-prediction context meaning as max_num_agents in MTR.yaml.
+max_num_agents:      32
+
+# max_agents_per_batch overrides the shared config field. Flatten all target windows from train_batch_size scenes;
+# if their count exceeds this cap, randomly subsample during collation before combining them for one forward pass.
+# Each window is an independent sub-scene; dropped windows can be sampled again in later epochs.
+# Historical memory test (24 GB GPU, 2026-06-08): each window carries local map tokens, and match_token_map BMM memory
+# grew with the merged window count. cap=2 worked; cap=4 caused OOM at a 23.3 GB peak. The current setting below is 10.
+# Larger-memory GPUs can support higher caps. This setting controls windows per forward pass, not total effective batch size.
+# For a larger effective batch without increasing per-pass memory, configure accumulate_grad_batches in train.py.
+# Gradient accumulation over separate forward passes is not enabled by this YAML alone.
+max_agents_per_batch: 10
+
+# The window-center offset uses config.yaml's center_offset_of_map=[30,0], placing it 30 m ahead along the target heading.
+# SMART_dataset.py reads the merged value. Override it here only when a different offset is needed.
+# smart_window_radius selects agents within this distance of the window center. null or a nonpositive value disables the radius filter,
+# leaving the max_num_agents nearest-agent cap. When enabled, apply the radius filter first, then select the nearest agents.
+smart_window_radius:  80.0
+# smart_map_crop_radius keeps map points/lines within a circle around the window center.
+# This local crop uses fewer map tokens than the union of all agent-centered crops in a full scene, reducing memory use.
+smart_map_crop_radius: 100.0
+h5_cache_format: 'unitraj_smart_token_unified_v1'

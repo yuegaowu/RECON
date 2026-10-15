@@ -1,0 +1,128 @@
+# ============================================================
+# RECON-NoAuxGeo: auxiliary geometry supervision ablation.
+# ============================================================
+# Remove only the additional best-of-6 ADE/FDE losses; retain the full network and base regression/classification losses.
+# This file fully specifies the method, like MTR/Wayformer/SMART, without inheriting another method YAML.
+# config.yaml controls exp_name, devices, data paths/sampling, initialization and output locations.
+# train.py merges this method into the shared configuration. Override model settings with method.<field>=<value>.
+# The model name does not load weights. Weight loading is controlled by ckpt_path and pretrained_path.
+
+# Implementation: models/recon/recon.py::RECON. Module and loss switches in this file select the variant.
+model_name: recon
+recon_arm: NoAuxGeo
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+use_map_image: false
+use_map_lanes: true
+num_modes: 6
+num_agent_feature: 29
+num_map_feature: 29
+hidden_size: 256
+num_encoder_layers: 2
+num_decoder_layers: 8
+tx_hidden_size: 1024
+tx_num_heads: 4
+dropout: 0.1
+num_queries_enc: 192
+num_queries_dec: 64
+
+# --- 2. Training hyperparameters (epochs, optimizer, learning rate, early stopping, DDP) ---
+# Maximum training epochs. Historical B/C/P/F profiles read their budget from recon_run; evaluation does not use this field.
+max_epochs: 100
+optimizer: AdamW
+# AdamW constructor value; OneCycle takes over the actual learning rate at initialization.
+learning_rate: 0.0001
+optimizer_eps: 0.0001
+weight_decay: 0.01
+scheduler: onecycle
+onecycle_max_lr: 0.0002
+# The scheduler advances once per epoch, not once per training batch.
+onecycle_steps_per_epoch: 1
+# Total scheduler length, independent of max_epochs. Early stopping does not compress the learning rate curve.
+onecycle_epochs: 150
+onecycle_pct_start: 0.02
+# Initial learning rate = max_lr / div_factor; 2e-4 / 100 = 2e-6.
+onecycle_div_factor: 100.0
+onecycle_final_div_factor: 10.0
+grad_clip_norm: 5
+# Validation checkpoint metric; lower is better. Accident test data is not used for checkpoint selection.
+monitor_metric: val/brier_fde
+ddp_strategy: ddp_find_unused_parameters_true
+# Validate once per epoch. Stop after 10 checks without a new best; min_delta=0 accepts any strict improvement.
+recon_early_stopping:
+  monitor: val/brier_fde
+  patience: 10
+  min_delta: 0.0
+# Controls only legacy paired P/F checks and audits. False uses the ordinary train.py workflow.
+recon_profile: false
+
+# --- 3. Data loading (scenes per GPU per step) ---
+# Scenes per GPU. After expansion, prediction targets are capped by config.yaml's max_agents_per_batch.
+train_batch_size: 10
+# Validation scenes per GPU, also used for standalone evaluation; eval.yaml selects datasets and scene counts.
+eval_batch_size: 10
+# Wayformer-family models share this base feature cache format; do not reuse SMART token caches.
+cache_path: ${data_root}/unitraj_cache/wayformer_unified_v1
+h5_cache_format: unitraj_wayformer_unified_v1
+
+# --- 4. Feature processing and scene cropping ---
+masked_attributes:
+- z_axis
+remove_outliers: false
+# Context-agent limit per prediction target, not the prediction-target limit per batch.
+max_num_agents: 32
+max_agent_distance: 80.0
+agent_center_offset:
+- 30.0
+- 0.0
+map_range: 100
+max_num_roads: 384
+max_points_per_lane: 30
+manually_split_lane: false
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0
+
+# --- 5. Added scoring branch and prototype pathway (ablation switches) ---
+causal_v1_enabled: false
+# Legacy key name for the added scoring branch; it does not establish causal deconfounding.
+causal_v2_enabled: true
+# True enables the separate scoring probe's normalization/fusion design; deployed RECON and its deletion ablations use false.
+clean_norm_v2: false
+graph_max_agents: 16
+graph_max_map_nodes: 64
+graph_risk_tokens: 4
+# dictionary = normal dictionary; mlp = legacy C control; none = remove the prototype-conditioned pathway.
+prototype_conditioning: dictionary
+# Prototype dictionary path for this model; the none mode does not read this file.
+confounder_init_path: ${oc.env:RECON_PROTOTYPES,artifacts/prototypes/normal_mode_prototypes_k64.pt}
+confounder_num_prototypes: 64
+confounder_save_in_ckpt: true
+prototype_l2_normalize: true
+prototype_attention_temperature: 0.2
+# Explicit gated subtraction strength. Setting 0 still retains prototype features and the LN(e-c) difference pathway.
+confounder_subtract_scale: 0.5
+causal_logit_residual_weight: 1.0
+
+# --- 6. Losses and trainable components ---
+# Additional best-of-6 ADE loss weight, separate from the base trajectory regression loss.
+best6_ade_weight: 0.0
+# Additional best-of-6 FDE loss weight.
+best6_fde_weight: 0.0
+cls_loss_weight: 1.0
+graph_sparsity_weight: 0.001
+prototype_entropy_weight: 0.0005
+dag_weight: 0.0
+# False trains the backbone and all retained scoring heads; the frozen dictionary is stored as a buffer.
+score_head_only: false
+rank_loss_weight: 0.0
+
+# --- 7. Inference postprocessing (legacy optional feature, not a default added module) ---
+kinematic_filter: false
+kf_dt: 0.1
+kf_smooth_step: 5
+kf_max_speed: 40.0
+kf_max_accel: 9.0
+kf_max_lat_accel: 8.0
+kf_min_speed_for_yaw: 2.0
+kf_keep_if_all_bad: true

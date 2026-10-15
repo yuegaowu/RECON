@@ -1,0 +1,82 @@
+# Shared training input settings. Model architecture and optimizer: method/*.yaml.
+# Paths are relative to unitraj/. Batch size is scenes per GPU; object cap is 64.
+# The current example uses 20% training batches and 50% validation batches.
+# Set a new exp_name for a new run; the same name resumes its last checkpoint.
+exp_name: recon_waymo
+devices:
+- 0
+ckpt_path: null
+pretrained_path: null
+resume_policy: auto
+checkpoint_root: unitraj_ckpt
+checkpoint_last_each_epoch: true
+checkpoint_keep_each_epoch: false
+use_wandb: false
+precision: 32-true
+seed: 42
+debug: false
+joint_train: false
+data_root: ${dataset_root}/waymo
+train_data_path:
+- ${data_root}/waymo_scenarionet/training
+val_data_path:
+- ${data_root}/waymo_scenarionet/validation
+max_data_num:
+- null
+max_val_data_num:
+- null
+limit_train_batches: 1.0
+limit_val_batches: 1.0
+starting_frame:
+- 0
+prediction_targets: official
+sdc_as_target: false
+object_type:
+- VEHICLE
+- PEDESTRIAN
+- CYCLIST
+past_len: 11
+future_len: 80
+max_agents_per_batch: 64
+load_num_workers: 4
+onthefly: true
+use_cache: false
+overwrite_cache: false
+cache_path: ${data_root}/unitraj_cache/default_unified_v1
+store_data_in_memory: false
+h5_cache_format: unitraj_default_unified_v1
+line_type:
+- lane
+- stop_sign
+- road_edge
+- road_line
+- crosswalk
+- speed_bump
+masked_attributes:
+- z_axis
+trajectory_sample_interval: 1
+remove_outliers: false
+center_offset_of_map:
+- 30.0
+- 0.0
+agent_center_offset:
+- 30.0
+- 0.0
+max_agent_distance: 80.0
+map_crop_shape: circle
+eval_waymo: false
+eval_nuscenes: false
+eval_argoverse2: false
+eval: false
+accident_ttc_eval: false
+strict_eval_support: false
+nuscenes_dataroot: ${dataset_root}/nuscenes
+hydra:
+  run:
+    dir: outputs/${exp_name}/rank${oc.env:RANK,0}
+  job:
+    chdir: false
+defaults:
+- method: RECON
+- _self_
+dataset_root: ${oc.env:RECON_DATA_ROOT,../data}

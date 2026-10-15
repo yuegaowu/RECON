@@ -1,0 +1,60 @@
+# Unified evaluation. Supply your own checkpoint and prepared datasets.
+# Example: python benchmark_eval.py method=RECON ckpt_path=/path/to/your.ckpt
+# eval_batch_size comes from the selected method YAML.
+defaults:
+- config
+- override method: RECON
+- _self_
+ckpt_path: ???
+devices:
+- 0
+exp_name: evaluation
+pretrained_path: null
+load_num_workers: 4
+max_data_num:
+- null
+- null
+max_val_data_num:
+- null
+- null
+starting_frame:
+- 0
+- 0
+strict_eval_support: false
+eval_tag: null
+dump_accident_records: true
+out_dir_suffix: __accident
+prediction_targets: official
+datasets:
+  waymo:
+    val_data_path: ${dataset_root}/waymo/waymo_scenarionet/validation
+    data_root: ${dataset_root}/waymo
+    sample_fraction: 5000
+    smart_eval_window_cap: 3
+  highd:
+    val_data_path: ${dataset_root}/highd/waymo_scenarionet/validation
+    data_root: ${dataset_root}/highd
+    sample_fraction: 3000
+    smart_eval_window_cap: 3
+  deepaccident_normal:
+    val_data_path: ${dataset_root}/deepaccident/scenarionet/normal
+    data_root: ${dataset_root}/waymo
+    sample_fraction: null
+    smart_eval_window_cap: 3
+  deepaccident_collision_vehicle:
+    val_data_path: ${dataset_root}/deepaccident/scenarionet/collision_vehicle
+    data_root: ${dataset_root}/waymo
+    sample_fraction: null
+    ttc_eval: true
+    prediction_targets: crash
+  realaccident_collision_vehicle:
+    val_data_path: ${dataset_root}/realaccident/scenarionet/collision_vehicle
+    data_root: ${dataset_root}/waymo
+    sample_fraction: null
+    ttc_eval: true
+    prediction_targets: crash
+  realaccident_single_vehicle:
+    val_data_path: ${dataset_root}/realaccident/scenarionet/single_vehicle
+    data_root: ${dataset_root}/waymo
+    sample_fraction: null
+    prediction_targets: crash

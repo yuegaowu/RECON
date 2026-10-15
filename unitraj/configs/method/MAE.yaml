@@ -1,0 +1,74 @@
+# ============================================================
+# Forecast-MAE (self-supervised pretraining stage).
+# ============================================================
+# This is the pretraining branch: models/fmae/model_mae.py and trainer_mae.py.
+# The downstream prediction branch is method=forecast, using trainer_forecast/model_forecast.
+#
+# Randomly mask history/future trajectory tokens and lane polylines, then reconstruct them
+# to learn scene representations. The encoder weights can initialize downstream forecast/EMP models
+# by setting config.yaml.pretrained_path to the pretraining checkpoint.
+# Architecture: hist_embed + future_embed + lane_embed, followed by encoder blocks and decoder blocks.
+# Reinsert mask_token and reconstruct future trajectories, history and lanes with three heads.
+# Inputs use convert_to_fmae_format, as in forecast/EMP: 4 agent features and 3 lane features.
+# Object type uses a four-class x_attr embedding. Size and z_axis are not read; no masking override is needed.
+#
+# Values in this file override matching config.yaml fields via OmegaConf.merge in train.py.
+# Hydra command-line overrides take precedence: python train.py method=MAE method.train_batch_size=16 ...
+# ============================================================
+
+model_name: MAE
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+dim:                  128           # Transformer hidden dimension (embed_dim / d_model).
+num_encoder_layers:   4             # Number of encoder transformer layers.
+num_decoder_layers:   4             # Number of decoder transformer layers (MAE only; forecast does not use this field).
+tx_num_heads:         8             # Number of attention heads.
+mlp_ratio:            4.0           # FFN hidden dimension = mlp_ratio * dim.
+qkv_bias:             False         # Whether the attention Q/K/V projections include bias.
+drop_path:            0.2           # Stochastic depth rate, increasing linearly from 0 to drop_path across layers.
+
+# --- 2. Training hyperparameters (mask ratios, loss weights, epochs, learning rate, gradient clipping) ---
+# MAE defines its optimizer and scheduler in trainer_mae.py:
+# AdamW with automatic decay/no-decay groups and epoch-based WarmupCosLR (linear warmup, then cosine decay to 1e-6).
+# The optimizer, scheduler and learning_rate_sched fields are therefore not needed here.
+# MAE mask ratios control reconstruction difficulty; the original paper uses 0.5 for both ratios.
+actor_mask_ratio:     0.5           # Fraction of future agent tokens randomly masked.
+lane_mask_ratio:      0.5           # Fraction of lane tokens randomly masked.
+# Loss weights: [future_loss, hist_loss, lane_pred_loss]. MAE only; forecast does not read this field.
+loss_weight:          [1.0, 1.0, 0.35]
+max_epochs:           60            # Default pretraining budget: 60 epochs (paper: 150; earlier local runs plateaued around epochs 50-80).
+warmup_epochs:        10            # Linear warmup to learning_rate over the first 10 epochs.
+learning_rate:        1.0e-3        # AdamW learning rate used with warmup; larger than the common transformer setting of 1e-4.
+weight_decay:         1.0e-4        # AdamW weight decay applied only to Linear/Conv weights.
+grad_clip_norm:       5             # Gradient clipping norm.
+# Checkpoint selection: single-mode MAE uses prediction ADE in meters (val/minADE), not brier_fde; lower is better.
+monitor_metric:       'val/minADE'
+# The decoder mask_token indexed assignment in model_mae.py is incompatible with fp16/bf16:
+# fp32 parameters and lower-precision encoder outputs cause a dtype mismatch. Before enabling AMP,
+# cast the three mask_token tensors to the output dtype after .repeat(...). Keep fp32 without that code change.
+
+# --- 3. Data loading (scene files per GPU per step) ---
+# Batch sizes are per GPU under DDP. config.yaml caps the actual forward-pass targets at max_agents_per_batch=64.
+# The cap limits actual targets, so the earlier aligned scene batch setting of 10 only needed to reach it.
+# MAE encodes history, future and lane tokens together. Reduce the scene batch to 8 if needed; AMP requires the fix above.
+train_batch_size:     10
+eval_batch_size:      10
+cache_path: "${data_root}/unitraj_cache/mae_unified_v1"
+h5_cache_format: 'unitraj_mae_unified_v1'
+
+# --- 4. Data cropping and feature masking (change with care) ---
+# max_num_agents controls context agents per prediction (the tensor N dimension), unlike config.yaml's
+# max_agents_per_batch=64, which caps the total prediction targets flattened by collate_fn at each step.
+# The MAE-specific H5 cache keeps all 29 features; the FMAE adapter extracts only the relative motion features it needs.
+masked_attributes:     [ 'z_axis' ]
+max_num_agents:        32
+max_agent_distance:    80.0
+agent_center_offset:   [ 30.0, 0.0 ]
+map_range:             100
+max_num_roads:         384
+max_points_per_lane:   30
+manually_split_lane:   False
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0
+remove_outliers:      False

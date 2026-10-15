@@ -1,0 +1,63 @@
+# ============================================================
+# EMP (Efficient Motion Predictor)
+# Downstream training built on Forecast-MAE; this is not the MAE pretraining stage.
+# ============================================================
+# Core design: a lightweight encoder with transformer blocks shared by actors and lanes.
+# 1. h_embed: self-attention over each actor's 11-step history, then max-pooling into one token.
+# 2. blocks: scene-level self-attention over N actors and M lanes.
+# 3. MultimodalDecoder: K=6 candidate trajectories and mode logits.
+# Compact inputs: 5 agent features (dx, dy, vdiff, mask, timestep) and 3 lane features; no size or z_axis.
+# Compatible with masked_attributes=['z_axis','size'] in the shared configuration.
+#
+# Values in this file override matching config.yaml fields via OmegaConf.merge in train.py.
+# Hydra command-line overrides take precedence: python train.py method=EMP method.train_batch_size=64 ...
+# ============================================================
+
+model_name: EMP
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+# EMP uses MultimodalDecoder, with no separate transformer decoder depth.
+dim:                  128           # Transformer hidden dimension (d_model).
+num_encoder_layers:   4             # Encoder depth for both h_embed (agent history) and blocks (scene features).
+tx_num_heads:         8             # Number of attention heads.
+mlp_ratio:            4.0           # FFN hidden dimension = mlp_ratio * dim.
+qkv_bias:             False         # Whether the attention Q/K/V projections include bias.
+drop_path:            0.2           # Stochastic depth rate, increasing linearly from 0 to drop_path across layers.
+decoder:              mlp           # Decoder type: mlp = MultimodalDecoder; detr = the heavier attention-based decoder.
+
+# --- 2. Training hyperparameters (pretrained weights, epochs, learning rate, gradient clipping) ---
+# EMP defines its optimizer and scheduler in trainer_forecast.py:
+# AdamW with automatic decay/no-decay groups and epoch-based WarmupCosLR (warmup, then cosine decay to 1e-6).
+# The optimizer, learning_rate_sched and ewc_lambda fields are therefore not needed here.
+# pretrained_weights: a path loads only net.* through net.load_from_checkpoint() with strict=False.
+# A typical use is initialization from MAE pretraining.
+pretrained_weights:   null          # Example: ./models/emp/pretrained_weights/empm.ckpt
+max_epochs:           100           # 100 epochs, following the downstream MAE training recipe.
+warmup_epochs:        10            # Linear warmup to learning_rate over the first 10 epochs.
+learning_rate:        1.0e-3        # AdamW learning rate used with warmup; larger than the common transformer setting of 1e-4.
+weight_decay:         1.0e-4        # AdamW weight decay applied only to Linear/Conv weights.
+grad_clip_norm:       5             # Gradient clipping norm.
+
+# --- 3. Data loading (scene files per GPU per step) ---
+# Batch sizes are per GPU under DDP. config.yaml caps the actual forward-pass targets at max_agents_per_batch=64.
+# A scene batch only needs to supply enough targets to reach the cap; the earlier aligned setting was 10 (paper: 32).
+train_batch_size:     3
+eval_batch_size:      3
+cache_path: "${data_root}/unitraj_cache/emp_unified_v1"
+h5_cache_format: 'unitraj_emp_unified_v1'
+
+# --- 4. Data cropping and features (change with care) ---
+# max_num_agents controls context agents per prediction (the tensor N dimension), unlike config.yaml's
+# max_agents_per_batch=64, which caps flattened targets per step. The shared input uses N=32 and M=384.
+masked_attributes:     [ 'z_axis' ]
+remove_outliers:       False
+max_num_agents:        32
+max_agent_distance:    80.0
+agent_center_offset:   [ 30.0, 0.0 ]
+map_range:             100
+max_num_roads:         384
+max_points_per_lane:   30
+manually_split_lane:   False
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0

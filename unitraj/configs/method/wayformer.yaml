@@ -1,0 +1,66 @@
+# ============================================================
+# Wayformer (Perceiver-based multimodal trajectory predictor)
+# Paper: https://arxiv.org/abs/2207.05844
+# ============================================================
+# Values in this file override matching config.yaml fields via OmegaConf.merge in train.py.
+# Hydra command-line overrides take precedence: python train.py method=wayformer method.train_batch_size=64 ...
+# ============================================================
+
+model_name: wayformer
+
+# --- 1. Model architecture (shape changes may invalidate existing checkpoints) ---
+use_map_image:        False         # Whether to use raster maps; disabled in this project.
+use_map_lanes:        True          # Whether to use vector map lanes; must be True here.
+num_modes:            6             # Six candidate trajectories, matching Waymo evaluation.
+num_agent_feature:    29            # Features per agent per timestep; must match base_dataset's obj_trajs.shape[-1].
+                                    # With past_len=11: 29 features (pos3 + size3 + type5 + time11 + heading3 + v2 + a2).
+num_map_feature:      29            # Features per map polyline point, as in MTR.
+hidden_size:          256           # Transformer hidden dimension (d_model).
+num_encoder_layers:   2             # Number of Perceiver encoder self-attention blocks.
+num_decoder_layers:   8             # Number of Perceiver decoder cross/self-attention layers.
+tx_hidden_size:       1024          # Transformer FFN hidden dimension, usually 4 * hidden_size.
+tx_num_heads:         4             # Number of attention heads.
+dropout:              0.1
+num_queries_enc:      192           # Number of learned encoder queries (Perceiver latent tokens).
+num_queries_dec:      64            # Number of learned decoder queries.
+
+# --- 2. Training hyperparameters (epochs, learning rate, scheduler, gradient clipping) ---
+# Loss: diagonal GMM NLL for the closest mode plus mode cross-entropy, with equal weights.
+max_epochs:           60
+optimizer:            AdamW
+learning_rate:        0.0001        # Optimizer constructor value; OneCycle takes over at initialization.
+optimizer_eps:        0.0001
+weight_decay:         0.01          # Explicitly set the original PyTorch AdamW default weight decay.
+scheduler:            onecycle      # Lightning advances the scheduler once per epoch.
+onecycle_max_lr:      0.0002
+onecycle_steps_per_epoch: 1
+onecycle_epochs:      150           # Full schedule length; a 60-epoch run uses only the first 60 schedule points.
+onecycle_pct_start:   0.02
+onecycle_div_factor:  100.0         # Initial learning rate = max_lr / div_factor = 2e-6.
+onecycle_final_div_factor: 10.0
+grad_clip_norm:       5             # Gradient clipping norm.
+
+# --- 3. Data loading (scene files per GPU per step) ---
+# Batch sizes are per GPU under DDP. config.yaml caps the actual forward-pass targets at max_agents_per_batch=64.
+# The cap limits actual targets. The current scene batch is 3 per GPU; target counts depend on scene contents.
+train_batch_size:     3
+eval_batch_size:      3
+cache_path: "${data_root}/unitraj_cache/wayformer_unified_v1"
+h5_cache_format: 'unitraj_wayformer_unified_v1'
+
+# --- 4. Data cropping and features (change with care) ---
+# max_num_agents controls context agents per prediction (the tensor N dimension), unlike config.yaml's
+# max_agents_per_batch=64, which caps flattened targets per step.
+# The shared input retains all 29 features; individual models may ignore unused dimensions.
+masked_attributes:     [ 'z_axis' ]
+remove_outliers:       False
+max_num_agents:        32
+max_agent_distance:    80.0
+agent_center_offset:   [ 30.0, 0.0 ]
+map_range:             100          # Circular crop with a 100 m radius around the shifted center.
+max_num_roads:         384          # Maximum number of map polylines per prediction target.
+max_points_per_lane:   30           # Subsample only features longer than 30 points; pad shorter features.
+manually_split_lane:   False        # Use original map features without global equal-length splitting.
+point_sampled_interval: 1
+num_points_each_polyline: 20
+vector_break_dist_thresh: 1.0

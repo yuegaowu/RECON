@@ -1,0 +1,18 @@
+# Requirements for Step 1 of data preparation only:
+# Converting raw Waymo tfrecord files → MTR intermediate pkl format.
+#
+# IMPORTANT: Do NOT install these into the main unitraj environment.
+# TensorFlow and PyTorch share CUDA libraries and conflict when co-installed.
+# Use a separate conda environment instead:
+#
+#   conda create -n waymo_preprocess python=3.9 -y
+#   conda activate waymo_preprocess
+#   pip install -r datasets/waymo_converter/requirements_preprocess.txt
+#   python datasets/waymo_converter/prepare_data.py --split training
+#
+# Step 2 (MTR pkl → ScenarioNet pkl) and training use the unitraj environment
+# and do NOT require any packages listed here.
+
+waymo-open-dataset-tf-2-11-0
+tqdm
+numpy
