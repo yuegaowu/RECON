@@ -5,15 +5,15 @@ display numbers follow the order in the README. These are qualitative examples.
 
 | Case | Clip duration | Animation |
 |---|---:|---|
-| 0 | 7.4 s | [Play GIF](../assets/animations/collision_03.gif) |
-| 1 | 9.2 s | [Play GIF](../assets/animations/collision_06.gif) |
-| 2 | 2.6 s | [Play GIF](../assets/animations/collision_09.gif) |
-| 3 | 9.2 s | [Play GIF](../assets/animations/collision_12.gif) |
-| 4 | 9.2 s | [Play GIF](../assets/animations/collision_14.gif) |
-| 5 | 9.2 s | [Play GIF](../assets/animations/collision_18.gif) |
-| 6 | 3.5 s | [Play GIF](../assets/animations/collision_25.gif) |
-| 7 | 9.2 s | [Play GIF](../assets/animations/collision_27.gif) |
-| 8 | 5.6 s | [Play GIF](../assets/animations/collision_31.gif) |
+| 0 | 7.4 s | [Play GIF](../assets/animations/case_0.gif) |
+| 1 | 9.2 s | [Play GIF](../assets/animations/case_1.gif) |
+| 2 | 2.6 s | [Play GIF](../assets/animations/case_2.gif) |
+| 3 | 9.2 s | [Play GIF](../assets/animations/case_3.gif) |
+| 4 | 9.2 s | [Play GIF](../assets/animations/case_4.gif) |
+| 5 | 9.2 s | [Play GIF](../assets/animations/case_5.gif) |
+| 6 | 3.5 s | [Play GIF](../assets/animations/case_6.gif) |
+| 7 | 9.2 s | [Play GIF](../assets/animations/case_7.gif) |
+| 8 | 5.6 s | [Play GIF](../assets/animations/case_8.gif) |
 
 Orange marks the target vehicle and its highest confidence prediction. Blue
 marks the collision partner, gray the surrounding traffic, and the dashed dark
