@@ -2,7 +2,36 @@
 
 Code for **RECON: Normal Driving References for Confidence Learning in Multimodal Accident Trajectory Prediction**, built on [UniTraj](https://github.com/vita-epfl/UniTraj).
 
-This initial source release contains RECON, ten comparison models, three component ablations, training configurations, data adapters, conversion tools, and the unified evaluator. It contains **no datasets, checkpoints, normal prototype files, clustered endpoints, token dictionaries, saved predictions, or experimental outputs**. Users must prepare their own data and model assets. This is a code release, not a packaged reproduction of the reported results.
+This source release contains RECON, ten comparison models, three component ablations, training configurations, data adapters, conversion tools, the unified evaluator, and rendered prediction demonstrations. It contains **no datasets, checkpoints, normal prototype files, clustered endpoints, token dictionaries, or raw prediction records**. Users must prepare their own data and model assets.
+
+## RealAccident demonstrations
+
+Nine selected real collision cases. **Click a preview to play the animation.**
+
+<table>
+  <tr>
+    <td align="center" width="33%"><a href="assets/animations/collision_03.gif"><img src="assets/animations/collision_03.png" alt="RealAccident case 03" width="100%"></a><br><b>Case 03</b></td>
+    <td align="center" width="33%"><a href="assets/animations/collision_06.gif"><img src="assets/animations/collision_06.png" alt="RealAccident case 06" width="100%"></a><br><b>Case 06</b></td>
+    <td align="center" width="33%"><a href="assets/animations/collision_09.gif"><img src="assets/animations/collision_09.png" alt="RealAccident case 09" width="100%"></a><br><b>Case 09</b></td>
+  </tr>
+  <tr>
+    <td align="center" width="33%"><a href="assets/animations/collision_12.gif"><img src="assets/animations/collision_12.png" alt="RealAccident case 12" width="100%"></a><br><b>Case 12</b></td>
+    <td align="center" width="33%"><a href="assets/animations/collision_14.gif"><img src="assets/animations/collision_14.png" alt="RealAccident case 14" width="100%"></a><br><b>Case 14</b></td>
+    <td align="center" width="33%"><a href="assets/animations/collision_18.gif"><img src="assets/animations/collision_18.png" alt="RealAccident case 18" width="100%"></a><br><b>Case 18</b></td>
+  </tr>
+  <tr>
+    <td align="center" width="33%"><a href="assets/animations/collision_25.gif"><img src="assets/animations/collision_25.png" alt="RealAccident case 25" width="100%"></a><br><b>Case 25</b></td>
+    <td align="center" width="33%"><a href="assets/animations/collision_27.gif"><img src="assets/animations/collision_27.png" alt="RealAccident case 27" width="100%"></a><br><b>Case 27</b></td>
+    <td align="center" width="33%"><a href="assets/animations/collision_31.gif"><img src="assets/animations/collision_31.png" alt="RealAccident case 31" width="100%"></a><br><b>Case 31</b></td>
+  </tr>
+</table>
+
+Scenes play at **10 Hz**, with RECON forecasts updated every **1 second**.
+Orange marks the target and its highest confidence prediction, blue the collision
+partner, gray surrounding vehicles, and the dashed curve the labeled future.
+Displayed predictions shorten with time and stop at the available future labels.
+
+[Playback details and individual animations](docs/ANIMATIONS.md).
 
 ## Models and configurations
 
@@ -101,6 +130,7 @@ The evaluator uses the same metric implementation as the research project. Its d
 ```text
 datasets/                 conversion code only
 docs/                     data requirements, protocol, license
+assets/animations/        rendered RealAccident GIFs and previews
 unitraj/
   train.py                training entry
   benchmark_eval.py       unified evaluation entry
