@@ -6,8 +6,6 @@ This source release contains RECON, ten comparison models, three component ablat
 
 ## RealAccident demonstrations
 
-Nine selected real collision cases. **Click a preview to play the animation.**
-
 <table>
   <tr>
     <td align="center" width="33%"><a href="assets/animations/collision_03.gif"><img src="assets/animations/collision_03.png" alt="RealAccident case 03" width="100%"></a><br><b>Case 03</b></td>
